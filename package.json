@@ -115,6 +115,10 @@
                 "description": "Type of launch configuration (must be 'apLaunch')",
                 "default": "apLaunch"
               },
+              "configure": {
+                "type": "string",
+                "description": "Ardupilot board configuration"
+              },
               "request": {
                 "type": "string",
                 "description": "Request type, must be 'launch'",
@@ -139,6 +143,14 @@
               "waffile": {
                 "type": "string",
                 "description": "Path to waf build script"
+              },
+              "mcuClass": {
+                "type": "string",
+                "description": "MCU class (e.g., 'STM32H7xx')"
+              },
+              "mcuName": {
+                "type": "string",
+                "description": "MCU name (e.g., 'STM32H757ZI')"
               }
             }
           }

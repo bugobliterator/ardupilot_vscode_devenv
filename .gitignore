@@ -27,3 +27,8 @@ dist-ssr
 *.sln
 *.sw?
 *.npmrc
+
+coverage/
+ardupilot/
+openocd/
+STMicro/

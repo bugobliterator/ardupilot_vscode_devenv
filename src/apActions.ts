@@ -19,21 +19,11 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { apLog } from './apLog';
 import { APTaskProvider, ArdupilotTaskDefinition } from './taskProvider';
-
-// Interface for launch configuration
-interface LaunchConfiguration {
-	name: string;
-	type: string;
-	request: string;
-	target: string;
-	preLaunchTask: string;
-	isSITL: boolean;
-	simVehicleCommand?: string;
-}
+import { APLaunchDefinition } from './apLaunch';
 
 // Store the currently active build configuration
 export let activeConfiguration: vscode.Task | undefined;
-export let activeLaunchConfig: LaunchConfiguration | null;
+export let activeLaunchConfig: APLaunchDefinition | null;
 
 // Function to update the active configuration
 export function setActiveConfiguration(task: vscode.Task): void {
@@ -145,7 +135,7 @@ export class apActionItem extends vscode.TreeItem {
 
 	}
 
-	static createMatchingLaunchConfig(configure: string, target: string, simVehicleCommand: string): LaunchConfiguration | null {
+	static createMatchingLaunchConfig(configure: string, target: string, simVehicleCommand: string): APLaunchDefinition | null {
 		const workspaceRoot = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined;
 		if (!workspaceRoot) {
 			apActionItem.log('No workspace folder is open.');
@@ -157,7 +147,7 @@ export class apActionItem extends vscode.TreeItem {
 		// Define a type for the launch configuration object
 		interface LaunchConfigFile {
 			version?: string;
-			configurations: LaunchConfiguration[];
+			configurations: APLaunchDefinition[];
 		}
 
 		let launchJson: LaunchConfigFile = { configurations: [] };
@@ -184,18 +174,38 @@ export class apActionItem extends vscode.TreeItem {
 		const launchConfigName = 'Launch Ardupilot';
 
 		// Create standard launch configuration
-		const newConfig: LaunchConfiguration = {
+		const newConfig: APLaunchDefinition = {
 			name: launchConfigName,
 			type: 'apLaunch',
 			request: 'launch',
+			configure: configure,
 			target: target,
 			preLaunchTask: `${APTaskProvider.ardupilotTaskType}: ${configure}-${target}`,
 			isSITL: isSITL,
 			...(simVehicleCommand && { simVehicleCommand })
 		};
 
+		// For hardware (non-SITL) targets, read MCU information from hw.dat
+		if (!isSITL) {
+			const buildFolder = path.join(workspaceRoot, 'build', configure);
+			if (fs.existsSync(buildFolder)) {
+				const mcuInfo = this.readMCUInfoFromHwDat(buildFolder);
+				if (mcuInfo) {
+					// Add MCU information to launch configuration if available
+					if (mcuInfo.mcuClass) {
+						newConfig.mcuClass = mcuInfo.mcuClass;
+					}
+					if (mcuInfo.mcuName) {
+						newConfig.mcuName = mcuInfo.mcuName;
+					}
+				}
+			} else {
+				apActionItem.log(`Build folder not found at ${buildFolder}, cannot read MCU information`);
+			}
+		}
+
 		// Check if a similar configuration already exists
-		const existingConfigIndex = launchJson.configurations.findIndex((config: LaunchConfiguration) =>
+		const existingConfigIndex = launchJson.configurations.findIndex((config: APLaunchDefinition) =>
 			config.type === 'apLaunch' &&
 			config.name === launchConfigName
 		);
@@ -334,6 +344,42 @@ export class apActionItem extends vscode.TreeItem {
 	private configure(): void {
 		// Show quick pick to select a configuration
 		this._actionsProvider.showConfigurationSelector();
+	}
+
+	/**
+	 * Read MCU information from hw.dat file for hardware targets
+	 * @param buildFolder The build folder path
+	 * @returns Object containing mcuClass and mcuName if found, or undefined
+	 */
+	static readMCUInfoFromHwDat(buildFolder: string): {mcuClass?: string, mcuName?: string} | undefined {
+		try {
+			// hw.dat is typically located at build/<board>/../hw.dat (one directory up from the target folder)
+			const hwDatPath = path.join(buildFolder, 'hw.dat');
+			if (!fs.existsSync(hwDatPath)) {
+				this.log(`hw.dat file not found at ${hwDatPath}`);
+				return undefined;
+			}
+			// Read the file content
+			const hwDatContent = fs.readFileSync(hwDatPath, 'utf8');
+			// Look for lines containing MCU information
+			// Format is typically: MCU <MCU_CLASS> <MCU_NAME>
+			const mcuRegex = /MCU\s+(\S+)\s+(\S+)/;
+			const match = hwDatContent.match(mcuRegex);
+			if (match && match.length >= 3) {
+				const mcuClass = match[1];
+				const mcuName = match[2];
+				this.log(`Found MCU info in hw.dat: class=${mcuClass}, name=${mcuName}`);
+				return {
+					mcuClass,
+					mcuName
+				};
+			}
+			this.log('MCU information not found in hw.dat file');
+			return undefined;
+		} catch (error) {
+			this.log(`Error reading hw.dat file: ${error}`);
+			return undefined;
+		}
 	}
 }
 

@@ -38,6 +38,13 @@ export class APTaskProvider implements vscode.TaskProvider {
 		APTaskProvider._extensionUri = extensionUri;
 	}
 
+	public static getExtensionUri(): vscode.Uri {
+		if (!this._extensionUri) {
+			throw new Error('Extension URI is not set. Please initialize the APTaskProvider with a valid URI.');
+		}
+		return this._extensionUri;
+	}
+
 	public provideTasks(): Thenable<vscode.Task[]> | undefined {
 		if (!this.ardupilotPromise) {
 			this.ardupilotPromise = getArdupilotTasks();

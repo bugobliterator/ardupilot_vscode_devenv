@@ -21,6 +21,7 @@ import * as fs from 'fs';
 import * as glob from 'fast-glob';
 import { ToolsConfig } from './apToolsConfig';
 import { apLog } from './apLog';
+import { APTaskProvider } from './taskProvider';
 
 /**
  * Interface for program information
@@ -81,8 +82,8 @@ export class ProgramUtils {
 			[ProgramUtils.TOOL_OPENOCD]:
 				{ linux: ['openocd'], darwin: ['openocd'] },
 			[ProgramUtils.TOOL_JLINK]:
-				{ linux: ['/mnt/c/Program Files/SEGGER/JLink/JLinkGDBServerCLExe', //wsl
-					'/mnt/c/Program Files (x86)/SEGGER/JLink/JLinkGDBServerCLExe', //wsl
+				{ linux: ['/mnt/c/Program Files/SEGGER/JLink/JLinkGDBServerCL.exe', //wsl
+					'/mnt/c/Program Files (x86)/SEGGER/JLink/JLinkGDBServerCL.exe', //wsl
 					'/opt/SEGGER/JLink*/JLinkGDBServerCLExe'
 				], darwin: ['JLinkGDBServerCLExe',
 					'/Applications/SEGGER/JLink/JLinkGDBServerCLExe'
@@ -107,16 +108,17 @@ export class ProgramUtils {
 		};
 
 	// find the tool path for the tool id
-	public static findToolPath(toolId: string): string | undefined {
+	public static findToolPath(toolId: string, platform?: string): string | undefined {
 		const toolPaths = ProgramUtils.TOOL_PATHS[toolId];
 		if (!toolPaths) {
 			return undefined;
 		}
-		const platform = os.platform() as 'linux' | 'darwin';
-		if (!toolPaths[platform]) {
+		platform = platform || os.platform();
+		const validPlatform = platform as 'linux' | 'darwin';
+		if (!toolPaths[validPlatform]) {
 			return undefined;
 		}
-		for (const toolPath of toolPaths[platform]) {
+		for (const toolPath of toolPaths[validPlatform]) {
 			if (toolPath) {
 				// Check if the path is a wildcard
 				if (toolPath.includes('*')) {
@@ -164,7 +166,8 @@ export class ProgramUtils {
 		args: string[] = ['--version'],
 		options?: {
 			versionRegex?: RegExp,
-			ignoreRunError?: boolean
+			ignoreRunError?: boolean,
+			platform?: string
 		}
 	): Promise<ProgramInfo> {
 		try {
@@ -185,7 +188,7 @@ export class ProgramUtils {
 			}
 
 			// Try to execute the command
-			const command = this.findToolPath(toolId);
+			const command = this.findToolPath(toolId, options?.platform);
 			if (!command) {
 				this.log.log(`Command ${toolId} not found in system path`);
 				return { available: false };
@@ -255,8 +258,80 @@ export class ProgramUtils {
 	}
 
 	public static async findOpenOCD(): Promise<ProgramInfo> {
-		// check for openocd
-		return this.findProgram(this.TOOL_OPENOCD, ['--version']);
+		// check for openocd by platform
+		const platform = os.platform();
+		if ((platform === 'linux' && !this.isWSL()) || platform === 'darwin') {
+			// Linux/Darwin: check for openocd
+			const result = await this.findProgram(this.TOOL_OPENOCD, ['--version']);
+			if (!result.available) {
+				// Add installation link if OpenOCD is not found
+				result.info = 'OpenOCD not found. Visit https://openocd.org/pages/getting-openocd.html for installation instructions';
+			}
+			return result;
+		} else if (this.isWSL()) {
+			// Windows/WSL: check for openocd.exe
+			// Try common Windows OpenOCD locations accessible from WSL
+			const result = await this.findProgram(this.TOOL_OPENOCD, ['--version']);
+			if (result && result.available) {
+				result.command = this.findToolPath(this.TOOL_OPENOCD);
+				return result;
+			}
+			const winPaths = [
+				'/mnt/c/OpenOCD/bin/openocd.exe',
+				'/mnt/c/Program Files/OpenOCD/bin/openocd.exe',
+				'/mnt/c/Program Files (x86)/OpenOCD/bin/openocd.exe'
+			];
+
+			for (const path of winPaths) {
+				if (fs.existsSync(path)) {
+					const result = await this._tryExecuteCommand(path, ['--version']);
+					if (result) {
+						return result;
+					}
+				}
+			}
+
+			// Not found in common locations
+			return {
+				available: false,
+				info: 'OpenOCD not found. In WSL, you can install OpenOCD in Windows and ensure it\'s in a directory accessible from WSL (e.g., C:\\OpenOCD). Visit https://openocd.org/pages/getting-openocd.html for installation instructions'
+			};
+			// Add installation link for Windows
+			return {
+				available: false,
+				info: 'OpenOCD not found. Visit https://openocd.org/pages/getting-openocd.html for installation instructions'
+			};
+		} else if (platform === 'win32') {
+			// Windows: check for openocd.exe
+			const result = await this.findProgram(this.TOOL_OPENOCD, ['--version'], { ignoreRunError: true });
+			if (result && result.available) {
+				result.command = this.findToolPath(this.TOOL_OPENOCD);
+				return result;
+			}
+			// If we couldn't find it using regular methods, check specific Windows paths
+			const winPaths = [
+				'C:\\OpenOCD\\bin\\openocd.exe',
+				'C:\\Program Files\\OpenOCD\\bin\\openocd.exe',
+				'C:\\Program Files (x86)\\OpenOCD\\bin\\openocd.exe'
+			];
+			for (const path of winPaths) {
+				if (fs.existsSync(path)) {
+					const result = await this._tryExecuteCommand(path, ['--version']);
+					if (result) {
+						return {
+							available: true,
+							path: path,
+							version: result.version || 'Unknown',
+							info: 'Using Windows OpenOCD'
+						};
+					}
+				}
+			}
+		}
+		return {
+			available: false,
+			info: 'OpenOCD not found. Visit https://openocd.org/pages/getting-openocd.html for installation instructions'
+		};
 	}
 
 	public static async findJLinkGDBServerCLExe(): Promise<ProgramInfo> {
@@ -399,6 +474,22 @@ export class ProgramUtils {
 	public static async findTmux(): Promise<ProgramInfo> {
 		// check for tmux
 		return this.findProgram(this.TOOL_TMUX, ['-V']);
+	}
+
+	/**
+	 * Gets the path to the JLinkRTOSPlugin based on the current platform
+	 * @returns The path to the JLinkRTOSPlugin
+	 * */
+	public static getJLinkRTOSPluginPath() : string {
+		const platform = os.platform();
+		// Return empty string for non-Windows/non-WSL environments
+		if (platform === 'win32' || this.isWSL()) {
+			return `${APTaskProvider.getExtensionUri().fsPath}/resources/RTOSPlugin_ChibiOS_${os.arch()}.dll`;
+		} else if (platform === 'darwin') {
+			return `${APTaskProvider.getExtensionUri().fsPath}/resources/RTOSPlugin_ChibiOS_${os.arch()}.dylib`;
+		} else {
+			return `${APTaskProvider.getExtensionUri().fsPath}/resources/RTOSPlugin_ChibiOS_${os.arch()}.so`;
+		}
 	}
 
 	/**
@@ -630,5 +721,36 @@ export class ProgramUtils {
 			this.log.log(`Error getting Python interpreter path: ${error}`);
 			return undefined;
 		}
+	}
+
+	/**
+	 * Gets the IP address for WSL networking
+	 * @returns The IP address for WSL, or 'localhost' if not in WSL
+	 */
+	public static wslIP(): string {
+		if (!ProgramUtils.isWSL()) {
+			return 'localhost';
+		}
+		let ip = 'localhost';
+		// If running in WSL, check wslinfo networking mode
+		const networkingMode = child_process.execSync('wslinfo --networking-mode').toString().trim();
+		if (networkingMode === 'nat') {
+			// extract the IP address from ip route show | grep -i default | awk '{ print $3}'`
+			// as mentioned here https://learn.microsoft.com/en-us/windows/wsl/networking
+			const ipRoute = child_process.execSync('ip route show | grep -i default | awk \'{ print $3}\'').toString().trim();
+			if (ipRoute) {
+				ip = ipRoute;
+			}
+		}
+		return ip;
+	}
+
+	public static wslPathToWin(path: string): string {
+		if (!ProgramUtils.isWSL()) {
+			return path;
+		}
+		// use wslpath to convert the path to windows path
+		const winPath = child_process.execSync(`wslpath -w ${path}`).toString().trim();
+		return winPath;
 	}
 }

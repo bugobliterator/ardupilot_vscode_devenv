@@ -5,3 +5,7 @@ src/**
 tsconfig.json
 .git/*
 webview-ui/node_modules/**
+ardupilot/**
+resources/openocd-*/**
+STMicro/**
+openocd/**
