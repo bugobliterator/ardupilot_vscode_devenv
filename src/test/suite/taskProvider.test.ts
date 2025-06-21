@@ -283,8 +283,12 @@ suite('APTaskProvider Test Suite', () => {
 			// Verify update was called
 			assert(mockConfiguration.update.called);
 			const updatedTasks = mockConfiguration.update.getCall(0).args[1];
-			assert.strictEqual(updatedTasks.length, 1);
-			assert.strictEqual(updatedTasks[0].simVehicleCommand, '--new-command');
+			// Now expect 2 tasks: mkdir task + updated build task
+			assert.strictEqual(updatedTasks.length, 2);
+			// Find the ardupilot task (not the mkdir task)
+			const ardupilotTask = updatedTasks.find((t: any) => t.type === 'ardupilot');
+			assert.ok(ardupilotTask);
+			assert.strictEqual(ardupilotTask.simVehicleCommand, '--new-command');
 		});
 
 		test('should add new task when not exists', () => {
@@ -296,9 +300,13 @@ suite('APTaskProvider Test Suite', () => {
 			assert.ok(task);
 			assert(mockConfiguration.update.called);
 			const updatedTasks = mockConfiguration.update.getCall(0).args[1];
-			assert.strictEqual(updatedTasks.length, 1);
-			assert.strictEqual(updatedTasks[0].configure, 'CubeOrange');
-			assert.strictEqual(updatedTasks[0].target, 'plane');
+			// Now expect 2 tasks: mkdir task + new build task
+			assert.strictEqual(updatedTasks.length, 2);
+			// Find the ardupilot task (not the mkdir task)
+			const ardupilotTask = updatedTasks.find((t: any) => t.type === 'ardupilot');
+			assert.ok(ardupilotTask);
+			assert.strictEqual(ardupilotTask.configure, 'CubeOrange');
+			assert.strictEqual(ardupilotTask.target, 'plane');
 		});
 
 		test('should handle malformed tasks.json gracefully', () => {
@@ -883,8 +891,12 @@ suite('APTaskProvider Test Suite', () => {
 
 			assert(mockConfiguration.update.called, 'Configuration should be updated');
 			const updatedTasks = mockConfiguration.update.getCall(0).args[1];
-			assert.strictEqual(updatedTasks.length, 1, 'Should have one task');
-			assert.strictEqual(updatedTasks[0].configName, configName, 'Persisted task should have configName');
+			// Now expect 2 tasks: mkdir task + build task
+			assert.strictEqual(updatedTasks.length, 2, 'Should have two tasks');
+			// Find the ardupilot task (not the mkdir task)
+			const ardupilotTask = updatedTasks.find((t: any) => t.type === 'ardupilot');
+			assert.ok(ardupilotTask, 'Should find ardupilot task');
+			assert.strictEqual(ardupilotTask.configName, configName, 'Persisted task should have configName');
 		});
 
 		test('should handle duplicate configNames correctly', () => {
@@ -906,9 +918,13 @@ suite('APTaskProvider Test Suite', () => {
 
 			assert(mockConfiguration.update.called, 'Configuration should be updated');
 			const updatedTasks = mockConfiguration.update.getCall(0).args[1];
-			assert.strictEqual(updatedTasks.length, 1, 'Should still have one task (updated existing)');
-			assert.strictEqual(updatedTasks[0].configure, 'sitl', 'Task should be updated with new board');
-			assert.strictEqual(updatedTasks[0].target, 'copter', 'Task should be updated with new target');
+			// Now expect 2 tasks: mkdir task + updated build task
+			assert.strictEqual(updatedTasks.length, 2, 'Should have two tasks (mkdir + updated existing)');
+			// Find the ardupilot task (not the mkdir task)
+			const ardupilotTask = updatedTasks.find((t: any) => t.type === 'ardupilot');
+			assert.ok(ardupilotTask, 'Should find ardupilot task');
+			assert.strictEqual(ardupilotTask.configure, 'sitl', 'Task should be updated with new board');
+			assert.strictEqual(ardupilotTask.target, 'copter', 'Task should be updated with new target');
 		});
 
 		test('should update existing task when configName matches', () => {
@@ -930,8 +946,12 @@ suite('APTaskProvider Test Suite', () => {
 
 			assert(mockConfiguration.update.called, 'Configuration should be updated');
 			const updatedTasks = mockConfiguration.update.getCall(0).args[1];
-			assert.strictEqual(updatedTasks.length, 1, 'Should still have one task');
-			assert.strictEqual(updatedTasks[0].simVehicleCommand, '--new-command', 'Persisted task should have new command');
+			// Now expect 2 tasks: mkdir task + updated build task
+			assert.strictEqual(updatedTasks.length, 2, 'Should have two tasks');
+			// Find the ardupilot task (not the mkdir task)
+			const ardupilotTask = updatedTasks.find((t: any) => t.type === 'ardupilot');
+			assert.ok(ardupilotTask, 'Should find ardupilot task');
+			assert.strictEqual(ardupilotTask.simVehicleCommand, '--new-command', 'Persisted task should have new command');
 		});
 
 	});
