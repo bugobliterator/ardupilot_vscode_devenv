@@ -163,28 +163,43 @@ export class APTaskProvider implements vscode.TaskProvider {
 			APTaskProvider.log.log(`Task created with simVehicleCommand: ${task.definition.simVehicleCommand}`);
 		}
 
+		// Create mkdir task
+		const mkdirTask = APTaskProvider.createMkdirTask(board, vscode.workspace.workspaceFolders[0]);
+		const mkdirTaskName = `create-build-dir-${board}`;
+
+		// Add dependency to the main task
+		const buildTaskDef = task.definition as ArdupilotTaskDefinition;
+		(buildTaskDef as any).dependsOn = [mkdirTaskName];
+
 		// Get the tasks configuration using the VS Code API
 		const tasksConfig = vscode.workspace.getConfiguration('tasks', vscode.workspace.workspaceFolders[0].uri);
 
 		// Get current tasks array or initialize empty array if it doesn't exist
-		const tasks = tasksConfig.get('tasks') as Array<ArdupilotTaskDefinition> || [];
+		const tasks = tasksConfig.get('tasks') as Array<any> || [];
 
-		// Check if task already exists with this configName
+		// Check if mkdir task already exists
+		const existingMkdirIndex = tasks.findIndex((t: any) => t.label === mkdirTaskName);
+		if (existingMkdirIndex === -1) {
+			// Add mkdir task
+			tasks.push(mkdirTask.definition);
+		}
+
+		// Check if build task already exists with this configName
 		const existingTaskIndex = tasks.findIndex((task: ArdupilotTaskDefinition) =>
 			task.configName === configName
 		);
 
 		if (existingTaskIndex !== -1) {
 			// Update existing task
-			tasks[existingTaskIndex] = task.definition as ArdupilotTaskDefinition;
+			tasks[existingTaskIndex] = buildTaskDef;
 		} else {
 			// Add new task
-			tasks.push(task.definition as ArdupilotTaskDefinition);
+			tasks.push(buildTaskDef);
 		}
 
 		// Update the tasks configuration
 		tasksConfig.update('tasks', tasks, vscode.ConfigurationTarget.Workspace).then(() => {
-			APTaskProvider.log.log(`Added/updated task ${configName} to tasks.json using VS Code API`);
+			APTaskProvider.log.log(`Added/updated task ${configName} and mkdir task to tasks.json using VS Code API`);
 		}, (error) => {
 			APTaskProvider.log.log(`Error updating tasks.json: ${error}`);
 			vscode.window.showErrorMessage(`Failed to update tasks.json: ${error}`);
@@ -205,18 +220,45 @@ export class APTaskProvider implements vscode.TaskProvider {
 		if (definition.nm === undefined) {
 			definition.nm = 'arm-none-eabi-nm';
 		}
+
 		// Use configName for task label
 		const task_name = definition.configName;
 
-		return new vscode.Task(
+		// Create build directory path
+		const buildDir = path.join(workspaceRoot.uri.fsPath, 'build', definition.configure);
+
+		// Create the main build task with correct working directory
+		const buildTask = new vscode.Task(
 			definition,
 			vscode.TaskScope.Workspace,
 			task_name,
 			'ardupilot',
 			new vscode.ShellExecution(
-				`python3 ${definition.waffile} configure --board=${definition.configure} ${definition.configureOptions} && python3 ${definition.waffile} ${definition.target} ${definition.buildOptions}`
+				`cd ../../ && python3 ${definition.waffile} configure --board=${definition.configure} ${definition.configureOptions} && python3 ${definition.waffile} ${definition.target} ${definition.buildOptions}`,
+				{ cwd: buildDir }
 			),
 			'$apgcc'
+		);
+
+		return buildTask;
+	}
+
+	/**
+	 * Creates a directory creation task for the specified board
+	 */
+	static createMkdirTask(boardName: string, workspaceRoot: vscode.WorkspaceFolder): vscode.Task {
+		const buildDir = path.join(workspaceRoot.uri.fsPath, 'build', boardName);
+		
+		return new vscode.Task(
+			{
+				type: 'shell',
+				command: `mkdir -p "${buildDir}"`,
+				group: 'build'
+			},
+			vscode.TaskScope.Workspace,
+			`create-build-dir-${boardName}`,
+			'shell',
+			new vscode.ShellExecution(`mkdir -p "${buildDir}"`)
 		);
 	}
 
@@ -425,8 +467,12 @@ async function getArdupilotTasks(): Promise<vscode.Task[]> {
 							configureOptions: configureOptions,
 						};
 						const task_name = boardtask.configure + '-' + buildtask;
-						const task = new vscode.Task(kind, workspaceFolder, task_name, 'ardupilot', new vscode.ShellExecution(`${waf} configure --board=${boardtask.configure} ${configureOptions} && ${waf} ${buildtask} ${buildOptions}`),'$apgcc');
-						result.push(task);
+						const task = APTaskProvider.createTask(kind);
+						if (task) {
+							result.push(task);
+						} else {
+							getOutputChannel().appendLine(`Failed to create task for ${task_name}`);
+						}
 					}
 				}
 			}

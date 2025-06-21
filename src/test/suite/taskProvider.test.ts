@@ -362,10 +362,15 @@ suite('APTaskProvider Test Suite', () => {
 
 			assert.ok(task);
 			assert.ok(task.execution);
+			// With the task dependency approach, verify the execution has correct working directory
 			const execution = task.execution as vscode.ShellExecution;
+			assert.ok(execution instanceof vscode.ShellExecution);
+			assert.ok(execution.options?.cwd?.includes('build/sitl'));
 			assert.ok(execution.commandLine?.includes('python3'));
-			assert.ok(execution.commandLine?.includes('configure --board=sitl --debug'));
-			assert.ok(execution.commandLine?.includes('copter --verbose'));
+			assert.strictEqual(task.definition.configure, 'sitl');
+			assert.strictEqual(task.definition.target, 'copter');
+			assert.strictEqual(task.definition.configureOptions, '--debug');
+			assert.strictEqual(task.definition.buildOptions, '--verbose');
 		});
 
 		test('should handle missing workspace folder in createTask', () => {
