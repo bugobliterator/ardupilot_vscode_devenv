@@ -248,7 +248,7 @@ export class APTaskProvider implements vscode.TaskProvider {
 	 */
 	static createMkdirTask(boardName: string, workspaceRoot: vscode.WorkspaceFolder): vscode.Task {
 		const buildDir = path.join(workspaceRoot.uri.fsPath, 'build', boardName);
-		
+
 		return new vscode.Task(
 			{
 				type: 'shell',
