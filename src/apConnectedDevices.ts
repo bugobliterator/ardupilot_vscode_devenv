@@ -16,6 +16,7 @@
 
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as os from 'os';
 import { apLog } from './apLog';
 import { ProgramUtils } from './apProgramUtils';
 
@@ -291,6 +292,8 @@ export class apConnectedDevices implements vscode.TreeDataProvider<ConnectedDevi
 
 		if (this.isWSL) {
 			newDevices = await this.getWSLDevices();
+		} else if (os.platform() === 'darwin') {
+			newDevices = await this.getDarwinDevices();
 		} else {
 			newDevices = await this.getLinuxDevices();
 		}
@@ -454,6 +457,175 @@ export class apConnectedDevices implements vscode.TreeDataProvider<ConnectedDevi
 			this.log.log(`Error in WSL device detection: ${error}`);
 			return [];
 		}
+	}
+
+	private async getDarwinDevices(): Promise<DeviceInfo[]> {
+		return new Promise((resolve) => {
+			// Use system_profiler to get USB device information
+			cp.exec('system_profiler SPUSBDataType -xml', async (error) => {
+				if (error) {
+					this.log.log(`Error executing system_profiler: ${error.message}`);
+					resolve([]);
+					return;
+				}
+
+				try {
+					// Parse the XML output
+					const devices: DeviceInfo[] = [];
+
+					// First, let's use a simpler approach with non-XML output
+					cp.exec('system_profiler SPUSBDataType', async (spError, spStdout) => {
+						if (spError) {
+							this.log.log(`Error executing system_profiler: ${spError.message}`);
+							resolve([]);
+							return;
+						}
+
+						// Parse the text output
+						const usbDevices = this.parseDarwinSystemProfiler(spStdout);
+
+						// Get serial ports
+						const serialPorts = await this.getDarwinSerialPorts();
+
+						// Match USB devices with serial ports
+						for (const usbDevice of usbDevices) {
+							// Try to find matching serial port
+							const matchingPorts = await this.findDarwinSerialPortForDevice(usbDevice, serialPorts);
+
+							for (const port of matchingPorts) {
+								devices.push({
+									path: port,
+									vendorId: usbDevice.vendorId,
+									productId: usbDevice.productId,
+									manufacturer: usbDevice.manufacturer,
+									product: usbDevice.product,
+									serialNumber: usbDevice.serialNumber,
+									isArduPilot: this.isArduPilotDevice(usbDevice.vendorId, usbDevice.productId, usbDevice.product)
+								});
+							}
+						}
+
+						resolve(devices);
+					});
+				} catch (parseError) {
+					this.log.log(`Error parsing system_profiler output: ${parseError}`);
+					resolve([]);
+				}
+			});
+		});
+	}
+
+	private parseDarwinSystemProfiler(output: string): Array<{vendorId: string, productId: string, manufacturer?: string, product?: string, serialNumber?: string}> {
+		const devices: Array<{vendorId: string, productId: string, manufacturer?: string, product?: string, serialNumber?: string}> = [];
+
+		// Split by USB devices (each device section starts with a product name)
+		const sections = output.split(/\n(?=\s{0,4}\S)/);
+
+		for (const section of sections) {
+			// Skip non-device sections
+			if (!section.includes('Product ID:') || !section.includes('Vendor ID:')) {
+				continue;
+			}
+
+			// Extract vendor ID (format: "Vendor ID: 0x1234")
+			const vendorMatch = section.match(/Vendor ID:\s*0x([0-9a-fA-F]+)/);
+			const productMatch = section.match(/Product ID:\s*0x([0-9a-fA-F]+)/);
+
+			if (vendorMatch && productMatch) {
+				const device: {vendorId: string, productId: string, manufacturer?: string, product?: string, serialNumber?: string} = {
+					vendorId: vendorMatch[1].toUpperCase(),
+					productId: productMatch[1].toUpperCase()
+				};
+
+				// Extract product name (first line of the section, trimmed)
+				const productNameMatch = section.match(/^\s*(.+?):/);
+				if (productNameMatch) {
+					device.product = productNameMatch[1].trim();
+				}
+
+				// Extract manufacturer
+				const manufacturerMatch = section.match(/Manufacturer:\s*(.+)/);
+				if (manufacturerMatch) {
+					device.manufacturer = manufacturerMatch[1].trim();
+				}
+
+				// Extract serial number
+				const serialMatch = section.match(/Serial Number:\s*(.+)/);
+				if (serialMatch) {
+					device.serialNumber = serialMatch[1].trim();
+				}
+
+				devices.push(device);
+			}
+		}
+
+		return devices;
+	}
+
+	private async getDarwinSerialPorts(): Promise<string[]> {
+		return new Promise((resolve) => {
+			// Look for both tty.* and cu.* devices (tty for incoming, cu for outgoing)
+			cp.exec('ls /dev/tty.* /dev/cu.* 2>/dev/null | grep -E "(usbserial|usbmodem|SLAB_USBtoUART|Bluetooth-Incoming-Port)" | grep -v Bluetooth', (error, stdout) => {
+				if (error) {
+					// No serial ports found
+					resolve([]);
+					return;
+				}
+
+				const ports = stdout.split('\n').filter(port => port.trim());
+				resolve(ports);
+			});
+		});
+	}
+
+	private async findDarwinSerialPortForDevice(usbDevice: {vendorId: string, productId: string, serialNumber?: string}, serialPorts: string[]): Promise<string[]> {
+		const matchingPorts: string[] = [];
+
+		// For devices with serial numbers, we can try to match more precisely
+		if (usbDevice.serialNumber) {
+			for (const port of serialPorts) {
+				// Check if the port name contains the serial number
+				if (port.includes(usbDevice.serialNumber)) {
+					matchingPorts.push(port);
+				}
+			}
+		}
+
+		// If no matches found with serial number, try a more general approach
+		if (matchingPorts.length === 0) {
+			// Common patterns for USB serial devices
+			const patterns = [
+				'usbserial',
+				'usbmodem',
+				'SLAB_USBtoUART'
+			];
+
+			for (const port of serialPorts) {
+				for (const pattern of patterns) {
+					if (port.includes(pattern)) {
+						// This is a potential match - on macOS we can't easily correlate
+						// VID/PID with serial port without using ioreg, so we'll include all
+						// USB serial ports as potential matches
+						matchingPorts.push(port);
+					}
+				}
+			}
+		}
+
+		// Remove duplicates (prefer /dev/cu.* over /dev/tty.*)
+		const uniquePorts = new Set<string>();
+		for (const port of matchingPorts) {
+			// If we have both tty and cu versions, prefer cu
+			const cuPort = port.replace('/dev/tty.', '/dev/cu.');
+
+			if (matchingPorts.includes(cuPort)) {
+				uniquePorts.add(cuPort);
+			} else {
+				uniquePorts.add(port);
+			}
+		}
+
+		return Array.from(uniquePorts);
 	}
 
 	private async findSerialDeviceForUsbDevice(vendorId: string, productId: string): Promise<string[]> {
